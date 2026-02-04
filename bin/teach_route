@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+
+# Copyright (C) 2025 Helio Perroni Filho (xperroni@gmail.com)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+r'''Record route waypoints for later replay.
+
+    Author: Helio Perroni Filho
+'''
+
+
+import rclpy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+
+from geometry_msgs import msg as geometry_msg
+from nav_msgs import msg as nav_msg
+from std_srvs import srv as std_srv
+
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+
+
+class TeachRoute(rclpy.node.Node):
+    r'''Functions to record a route file.
+    '''
+    def __init__(self):
+        r'''Create a new route recorder node.
+        '''
+        super().__init__('teach_route')
+        self.declare_parameter('global_frame', 'map')
+        self.declare_parameter('robot_base_frame', 'base_footprint')
+        self.declare_parameter('save_path', 'route.pon')
+
+        self.__global_frame = self.get_parameter('global_frame').value
+        self.__robot_frame = self.get_parameter('robot_base_frame').value
+        self.__save_path = self.get_parameter('save_path').value
+
+        self.__buffer = Buffer()
+        self.__listener = TransformListener(self.__buffer, self)
+
+        self.__pub_route = self.create_publisher(
+            nav_msg.Path, '~/route',
+            QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST
+            )
+        )
+
+        self.__route = nav_msg.Path()
+        self.__route.header.frame_id = self.__global_frame
+
+        self.__push = self.create_service(std_srv.Trigger, '~/push', self.__callback_push)
+        self.__pop = self.create_service(std_srv.Trigger, '~/pop', self.__callback_pop)
+        self.__save = self.create_service(std_srv.Trigger, '~/save', self.__callback_save)
+
+    def __callback_push(self, request, response):
+        r'''Handle a waypoint recording service request.
+        '''
+        try:
+            transform = self.__buffer.lookup_transform(
+                self.__global_frame,
+                self.__robot_frame,
+                rclpy.time.Time()
+            )
+        except TransformException as e:
+            response.success = False
+            response.message = f'Error computing transform from robot to global frame: "{e}"'
+            return response
+
+        now = self.get_clock().now().to_msg()
+
+        pose = geometry_msg.PoseStamped()
+        pose.header.frame_id = self.__global_frame
+        pose.header.stamp = now
+
+        translation = transform.transform.translation
+        pose.pose.position.x = translation.x
+        pose.pose.position.y = translation.y
+        pose.pose.position.z = translation.z
+        pose.pose.orientation = transform.transform.rotation
+
+        self.__route.poses.append(pose)
+        self.__route.header.stamp = now
+
+        self.__pub_route.publish(self.__route)
+
+        response.success = True
+        return response
+
+    def __callback_pop(self, request, response):
+        r'''Handle a waypoint removal service request.
+        '''
+        if self.__route.poses:
+            self.__route.poses.pop()
+            self.__route.header.stamp = self.get_clock().now().to_msg()
+            self.__pub_route.publish(self.__route)
+
+        response.success = True
+        return response
+
+    def __callback_save(self, request, response):
+        r'''Handle the route file saving service request.
+        '''
+        with open(self.__save_path, 'w') as out:
+            out.write(f'{repr(self.__route)}\n')
+
+        response.success = True
+        return response
+
+
+def main():
+    r'''Start the node.
+    '''
+    rclpy.init()
+
+    node = TeachRoute()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == '__main__':
+    main()
