@@ -30,15 +30,13 @@ from std_srvs import srv as std_srv
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+from roselito_agent.pegar_posicao_robo import pegar_posicao_robo
 
 
 class TeachRoute(rclpy.node.Node):
-    r'''Functions to record a route file.
-    '''
     def __init__(self):
-        r'''Create a new route recorder node.
-        '''
         super().__init__('teach_route')
+        
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('robot_base_frame', 'base_footprint')
         self.declare_parameter('save_path', 'route.pon')
@@ -52,11 +50,7 @@ class TeachRoute(rclpy.node.Node):
 
         self.__pub_route = self.create_publisher(
             nav_msg.Path, '~/route',
-            QoSProfile(
-                depth=1,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                history=HistoryPolicy.KEEP_LAST
-            )
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
         )
 
         self.__route = nav_msg.Path()
@@ -67,34 +61,21 @@ class TeachRoute(rclpy.node.Node):
         self.__save = self.create_service(std_srv.Trigger, '~/save', self.__callback_save)
 
     def __callback_push(self, request, response):
-        r'''Handle a waypoint recording service request.
-        '''
-        try:
-            transform = self.__buffer.lookup_transform(
-                self.__global_frame,
-                self.__robot_frame,
-                rclpy.time.Time()
-            )
-        except TransformException as e:
+        # Chamada passando explicitamente os argumentos necessários
+        pose = pegar_posicao_robo(
+            self, 
+            self.__buffer, 
+            self.__global_frame, 
+            self.__robot_frame
+        )
+
+        if pose is None:
             response.success = False
-            response.message = f'Error computing transform from robot to global frame: "{e}"'
+            response.message = "Não foi possível obter a pose via TF."
             return response
 
-        now = self.get_clock().now().to_msg()
-
-        pose = geometry_msg.PoseStamped()
-        pose.header.frame_id = self.__global_frame
-        pose.header.stamp = now
-
-        translation = transform.transform.translation
-        pose.pose.position.x = translation.x
-        pose.pose.position.y = translation.y
-        pose.pose.position.z = translation.z
-        pose.pose.orientation = transform.transform.rotation
-
         self.__route.poses.append(pose)
-        self.__route.header.stamp = now
-
+        self.__route.header.stamp = self.get_clock().now().to_msg()
         self.__pub_route.publish(self.__route)
 
         response.success = True

@@ -27,10 +27,12 @@
   <arg name="global_frame" default="map"/>
   <arg name="robot_base_frame" default="base_footprint"/>
   <arg name="path" default="$(env PWD)/route.pon"/>
+  <arg name="dist_threshold" default="0.5" />
   <node name="replay_route" pkg="roselito_agent" exec="replay_route">
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <param name="global_frame" value="$(var global_frame)"/>
     <param name="robot_base_frame" value="$(var robot_base_frame)"/>
-    <param name="save_path" value="$(var path)"/>
+    <param name="path" value="$(var path)"/>
+    <param name="dist_threshold" value="$(var dist_threshold)"/>
   </node>
 </launch>
