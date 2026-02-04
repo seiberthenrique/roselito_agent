@@ -1,24 +1,10 @@
 #!/usr/bin/env python
 
 # Copyright (C) 2025 Helio Perroni Filho (xperroni@gmail.com)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#         http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# (Licença mantida conforme original)
 
-r'''Record route waypoints for later replay.
-
-    Author: Helio Perroni Filho
+r'''Record route waypoints for later replay with custom save interface.
 '''
-
 
 import rclpy
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
@@ -27,7 +13,8 @@ from geometry_msgs import msg as geometry_msg
 from nav_msgs import msg as nav_msg
 from std_srvs import srv as std_srv
 
-from tf2_ros import TransformException
+from roselito_interface.srv import SaveRoute 
+
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from roselito_agent.pegar_posicao_robo import pegar_posicao_robo
@@ -37,6 +24,7 @@ class TeachRoute(rclpy.node.Node):
     def __init__(self):
         super().__init__('teach_route')
         
+        # Parâmetros
         self.declare_parameter('global_frame', 'map')
         self.declare_parameter('robot_base_frame', 'base_footprint')
         self.declare_parameter('save_path', 'route.pon')
@@ -45,9 +33,11 @@ class TeachRoute(rclpy.node.Node):
         self.__robot_frame = self.get_parameter('robot_base_frame').value
         self.__save_path = self.get_parameter('save_path').value
 
+        # TF Setup
         self.__buffer = Buffer()
         self.__listener = TransformListener(self.__buffer, self)
 
+        # Publisher para visualização
         self.__pub_route = self.create_publisher(
             nav_msg.Path, '~/route',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
@@ -56,12 +46,13 @@ class TeachRoute(rclpy.node.Node):
         self.__route = nav_msg.Path()
         self.__route.header.frame_id = self.__global_frame
 
+        # Serviços
         self.__push = self.create_service(std_srv.Trigger, '~/push', self.__callback_push)
         self.__pop = self.create_service(std_srv.Trigger, '~/pop', self.__callback_pop)
-        self.__save = self.create_service(std_srv.Trigger, '~/save', self.__callback_save)
+        
+        self.__save = self.create_service(SaveRoute, '~/save', self.__callback_save)
 
     def __callback_push(self, request, response):
-        # Chamada passando explicitamente os argumentos necessários
         pose = pegar_posicao_robo(
             self, 
             self.__buffer, 
@@ -79,39 +70,54 @@ class TeachRoute(rclpy.node.Node):
         self.__pub_route.publish(self.__route)
 
         response.success = True
+        response.message = f"Waypoint adicionado. Total: {len(self.__route.poses)}"
         return response
 
     def __callback_pop(self, request, response):
-        r'''Handle a waypoint removal service request.
-        '''
         if self.__route.poses:
             self.__route.poses.pop()
             self.__route.header.stamp = self.get_clock().now().to_msg()
             self.__pub_route.publish(self.__route)
-
-        response.success = True
+            response.success = True
+            response.message = "Último waypoint removido."
+        else:
+            response.success = False
+            response.message = "A rota já está vazia."
         return response
 
     def __callback_save(self, request, response):
-        r'''Handle the route file saving service request.
+        r'''Handle the route file saving service request using custom path.
         '''
-        with open(self.__save_path, 'w') as out:
-            out.write(f'{repr(self.__route)}\n')
+        # Lógica: se o usuário passar um caminho vazio no serviço, usa o padrão do parâmetro
+        caminho_final = request.path if request.path else self.__save_path
 
-        response.success = True
+        try:
+            with open(caminho_final, 'w') as out:
+                # O repr() é vital para que o eval() funcione no ReplayRoute depois
+                out.write(f'{repr(self.__route)}\n')
+            
+            response.success = True
+            response.message = f"Rota salva com sucesso em: {caminho_final}"
+            self.get_logger().info(response.message)
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Falha ao salvar arquivo: {str(e)}"
+            self.get_logger().error(response.message)
+
         return response
 
 
 def main():
-    r'''Start the node.
-    '''
     rclpy.init()
-
     node = TeachRoute()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

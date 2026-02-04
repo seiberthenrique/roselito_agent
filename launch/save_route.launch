@@ -25,7 +25,7 @@
 <launch>
   <executable
     launch-prefix="ros2 service call"
-    cmd="/teach_route/save std_srvs/srv/Trigger"
+    cmd="/teach_route/save roselito_interface/srv/SaveRoute '{path: '$(var path)'}'"
     output="screen"
   />
 </launch>
